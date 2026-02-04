@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import pandas as pd
 import joblib
 
-# Load models
+# ---------------- LOAD MODELS ----------------
 diet_model = joblib.load("lib/models/diet_model.joblib")
 food_model = joblib.load("lib/models/food_model.joblib")
 
@@ -20,19 +20,19 @@ class DietRequest(BaseModel):
     disease: str
 
 class FoodRequest(BaseModel):
-    diet_category: str
+    diet_category: str   # client-facing name
     diet: str
     meal: str
 
-# ---------------- API ENDPOINTS ----------------
+# ---------------- DIET PREDICTION ----------------
 @app.post("/predict_diet")
 def predict_diet(request: DietRequest):
 
-    # ✅ Compute BMI (same logic as training)
+    # Compute BMI (same logic as training)
     height_m = request.height / 100
     bmi = request.weight / (height_m ** 2)
 
-    # ✅ DataFrame with EXACT training columns
+    # EXACT training schema
     X = pd.DataFrame([{
         "age": request.age,
         "weight": request.weight,
@@ -47,11 +47,13 @@ def predict_diet(request: DietRequest):
     pred = diet_model.predict(X)[0]
     return {"diet_category": pred}
 
-
+# ---------------- FOOD PREDICTION ----------------
 @app.post("/predict_food")
 def predict_food(request: FoodRequest):
+
+    # Map API field → model field
     X = pd.DataFrame([{
-        "diet_category": request.diet_category,
+        "food_category": request.diet_category,  # 👈 FIX
         "diet": request.diet,
         "meal": request.meal
     }])
