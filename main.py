@@ -1,16 +1,32 @@
+import os
 import pandas as pd
 import joblib
 import numpy as np
 import random
 from fastapi import FastAPI
 from pydantic import BaseModel
+from pathlib import Path
 
 # --------------------------------
-# 1. LOAD MODELS
+# 1. SETUP PATHS & LOAD MODELS
 # --------------------------------
-# Make sure "dish_recommender_model_extended.pkl" is in your project directory
-diet_model = joblib.load("lib/models/diet_model.joblib")
-food_model = joblib.load("dish_recommender_model_extended.pkl")
+# Get the directory where main.py is located
+BASE_DIR = Path(__file__).resolve().parent
+
+# Define absolute paths to your models
+# This prevents FileNotFoundError on Render/Cloud hosting
+diet_model_path = os.path.join(BASE_DIR, "lib", "models", "diet_model.joblib")
+food_model_path = os.path.join(BASE_DIR, "dish_recommender_model_extended.pkl")
+
+# Load the models
+try:
+    diet_model = joblib.load(diet_model_path)
+    food_model = joblib.load(food_model_path)
+    print("Models loaded successfully!")
+except Exception as e:
+    print(f"Error loading models: {e}")
+    # Fallback paths in case they are both in the root folder
+    food_model = joblib.load("dish_recommender_model_extended.pkl")
 
 app = FastAPI(title="Diet & Food Recommendation API")
 
@@ -35,6 +51,7 @@ class FoodRequest(BaseModel):
 # --------------------------------
 @app.post("/predict_diet")
 def predict_diet(request: DietRequest):
+    # Standard BMI calculation
     height_m = request.height / 100
     bmi = request.weight / (height_m ** 2)
 
@@ -57,7 +74,11 @@ def predict_diet(request: DietRequest):
 # --------------------------------
 @app.post("/predict_food")
 def predict_food(request: FoodRequest):
-    # 1. Prepare input for the model
+    """
+    Takes diet category and meal type, picks one random dish 
+    from the top 10 recommended by the Logistic Regression model.
+    """
+    # 1. Prepare input with correct training column names
     X = pd.DataFrame([{
         "diet_type": request.diet_category,
         "meal_type": request.meal
@@ -69,19 +90,22 @@ def predict_food(request: FoodRequest):
         classes = food_model.named_steps["classifier"].classes_
 
         # 3. Get indices of the top 10 most likely dishes
-        # (This matches your training script's logic)
         top_n = 10
+        # Argsort gives indices of sorted values; we take the last 10
         top_indices = np.argsort(probs)[-top_n:]
         
-        # 4. Randomly select exactly ONE dish from the top 10
+        # 4. Randomly select exactly ONE dish for the Flutter app
         random_selection = random.choice(classes[top_indices])
 
-        return {"recommended_food": str(random_selection)}
+        # Clean up the string (replace underscores with spaces for the UI)
+        clean_dish_name = str(random_selection).replace("_", " ").title()
+
+        return {"recommended_food": clean_dish_name}
     
     except Exception as e:
-        return {"error": str(e), "message": "Check if diet_category matches training labels."}
+        return {"error": str(e), "message": "Ensure input matches trained diet types."}
 
 # --------------------------------
 # RUN COMMAND:
-# uvicorn main:app --reload
+# uvicorn main:app --host 0.0.0.0 --port 8000
 # --------------------------------
