@@ -5,44 +5,40 @@ import numpy as np
 import random
 from fastapi import FastAPI
 from pydantic import BaseModel
-from pathlib import Path
-
-app = FastAPI(title="Diet & Food Recommendation API")
 
 # --------------------------------
-# 1. SMART MODEL LOADING
+# 1. LOAD MODELS
 # --------------------------------
-BASE_DIR = Path(__file__).resolve().parent
+# Get the current folder path
+CURRENT_DIR = os.path.dirname(__file__)
 
-def load_model_safely(filename):
-    # Try 1: Look in Root
-    path1 = os.path.join(BASE_DIR, filename)
-    # Try 2: Look in lib/models
-    path2 = os.path.join(BASE_DIR, "lib", "models", filename)
-    
-    if os.path.exists(path1):
-        return joblib.load(path1)
-    elif os.path.exists(path2):
-        return joblib.load(path2)
-    else:
-        # This will show you exactly what files ARE there in the logs
-        files_present = os.listdir(BASE_DIR)
-        raise FileNotFoundError(f"Could not find {filename}. Files found in root: {files_present}")
+# Define paths
+diet_path = os.path.join(CURRENT_DIR, "lib", "models", "diet_model.joblib")
+food_path = os.path.join(CURRENT_DIR, "dish_recommender_model_extended.pkl")
 
-# Load models
+# Load Diet Model
 try:
-    diet_model = load_model_safely("diet_model.joblib")
-    food_model = load_model_safely("dish_recommender_model_extended.pkl")
-    print("✅ All models loaded successfully!")
-except Exception as e:
-    print(f"❌ CRITICAL ERROR: {e}")
-    # Don't crash the whole server, but the endpoints will fail
+    diet_model = joblib.load(diet_path)
+except:
     diet_model = None
+
+# Load Food Model
+try:
+    food_model = joblib.load(food_path)
+    print("✅ Food model loaded!")
+except Exception as e:
+    print(f"❌ Error: {e}")
     food_model = None
 
+app = FastAPI()
+
 # --------------------------------
-# 2. REQUEST SCHEMAS
+# 2. SCHEMAS
 # --------------------------------
+class FoodRequest(BaseModel):
+    diet_category: str
+    meal: str
+
 class DietRequest(BaseModel):
     age: int
     gender: str
@@ -52,32 +48,49 @@ class DietRequest(BaseModel):
     diet: str
     disease: str
 
-class FoodRequest(BaseModel):
-    diet_category: str
-    meal: str
-
 # --------------------------------
 # 3. ENDPOINTS
 # --------------------------------
+
 @app.post("/predict_diet")
 def predict_diet(request: DietRequest):
-    if not diet_model: return {"error": "Diet model not loaded"}
+    if not diet_model:
+        return {"error": "Diet model file missing on server"}
+    
     height_m = request.height / 100
     bmi = request.weight / (height_m ** 2)
-    X = pd.DataFrame([{"age": request.age, "weight": request.weight, "height": request.height, "bmi": bmi, "gender": request.gender, "goal": request.goal, "diet": request.diet, "disease": request.disease}])
-    pred = diet_model.predict(X)[0]
-    return {"diet_category": pred}
+    
+    X = pd.DataFrame([{
+        "age": request.age, "weight": request.weight, "height": request.height,
+        "bmi": bmi, "gender": request.gender, "goal": request.goal,
+        "diet": request.diet, "disease": request.disease
+    }])
+    
+    return {"diet_category": diet_model.predict(X)[0]}
 
 @app.post("/predict_food")
 def predict_food(request: FoodRequest):
-    if not food_model: return {"error": "Food model not loaded"}
-    X = pd.DataFrame([{"diet_type": request.diet_category, "meal_type": request.meal}])
+    if not food_model:
+        return {"error": "Food model file missing on server"}
+
+    # Map input to model columns
+    X = pd.DataFrame([{
+        "diet_type": request.diet_category,
+        "meal_type": request.meal
+    }])
+
     try:
+        # Get top 10 likely dishes
         probs = food_model.predict_proba(X)[0]
         classes = food_model.named_steps["classifier"].classes_
         top_indices = np.argsort(probs)[-10:]
-        random_selection = random.choice(classes[top_indices])
-        clean_name = str(random_selection).replace("_", " ").title()
-        return {"recommended_food": clean_name}
+        
+        # Pick one at random
+        pick = random.choice(classes[top_indices])
+        
+        # Format "chicken_stirfry" -> "Chicken Stirfry"
+        formatted_name = str(pick).replace("_", " ").title()
+        
+        return {"recommended_food": formatted_name}
     except Exception as e:
         return {"error": str(e)}
