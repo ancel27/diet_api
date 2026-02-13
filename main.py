@@ -1,15 +1,22 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
 import pandas as pd
 import joblib
+import numpy as np
+import random
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-# ---------------- LOAD MODELS ----------------
+# --------------------------------
+# 1. LOAD MODELS
+# --------------------------------
+# Make sure "dish_recommender_model_extended.pkl" is in your project directory
 diet_model = joblib.load("lib/models/diet_model.joblib")
-food_model = joblib.load("lib/models/food_model.joblib")
+food_model = joblib.load("dish_recommender_model_extended.pkl")
 
 app = FastAPI(title="Diet & Food Recommendation API")
 
-# ---------------- REQUEST SCHEMAS ----------------
+# --------------------------------
+# 2. REQUEST SCHEMAS
+# --------------------------------
 class DietRequest(BaseModel):
     age: int
     gender: str
@@ -20,19 +27,17 @@ class DietRequest(BaseModel):
     disease: str
 
 class FoodRequest(BaseModel):
-    diet_category: str   # client-facing name
-    diet: str
-    meal: str
+    diet_category: str  # e.g., "pcos_friendly"
+    meal: str           # e.g., "lunch"
 
-# ---------------- DIET PREDICTION ----------------
+# --------------------------------
+# 3. DIET PREDICTION
+# --------------------------------
 @app.post("/predict_diet")
 def predict_diet(request: DietRequest):
-
-    # Compute BMI (same logic as training)
     height_m = request.height / 100
     bmi = request.weight / (height_m ** 2)
 
-    # EXACT training schema
     X = pd.DataFrame([{
         "age": request.age,
         "weight": request.weight,
@@ -47,16 +52,36 @@ def predict_diet(request: DietRequest):
     pred = diet_model.predict(X)[0]
     return {"diet_category": pred}
 
-# ---------------- FOOD PREDICTION ----------------
+# --------------------------------
+# 4. FOOD PREDICTION (Randomized Single Pick)
+# --------------------------------
 @app.post("/predict_food")
 def predict_food(request: FoodRequest):
-
-    # Map API field → model field
+    # 1. Prepare input for the model
     X = pd.DataFrame([{
-        "food_category": request.diet_category,  # 👈 FIX
-        "diet": request.diet,
-        "meal": request.meal
+        "diet_type": request.diet_category,
+        "meal_type": request.meal
     }])
 
-    pred = food_model.predict(X)[0]
-    return {"recommended_food": pred}
+    try:
+        # 2. Get probabilities for all possible dishes
+        probs = food_model.predict_proba(X)[0]
+        classes = food_model.named_steps["classifier"].classes_
+
+        # 3. Get indices of the top 10 most likely dishes
+        # (This matches your training script's logic)
+        top_n = 10
+        top_indices = np.argsort(probs)[-top_n:]
+        
+        # 4. Randomly select exactly ONE dish from the top 10
+        random_selection = random.choice(classes[top_indices])
+
+        return {"recommended_food": str(random_selection)}
+    
+    except Exception as e:
+        return {"error": str(e), "message": "Check if diet_category matches training labels."}
+
+# --------------------------------
+# RUN COMMAND:
+# uvicorn main:app --reload
+# --------------------------------
